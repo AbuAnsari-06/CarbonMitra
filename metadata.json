@@ -1,0 +1,6 @@
+{
+  "name": "CarbonMitra",
+  "description": "Satellite-based carbon credit verification and marketplace platform for smallholder farmers using Sentinel-2 NDVI data and blockchain smart contracts.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
