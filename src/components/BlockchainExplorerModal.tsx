@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { DUMMY_CONTRACT_ADDRESS, POLYGON_SCAN_AMOY_BASE } from '../data/presets';
 import { TransactionRecord, CarbonCredit } from '../types';
+import { APPROX_INR_PER_USD } from '../lib/constants';
 import { Cpu, ExternalLink, Copy, Check, ShieldCheck, ArrowRightLeft, Coins } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -104,7 +105,7 @@ export const BlockchainExplorerModal: React.FC<BlockchainExplorerModalProps> = (
                     <div>
                       <span className="text-indigo-400 font-bold">CreditTransferred</span>
                       <span className="text-zinc-400 text-[11px] block font-sans">
-                        Token #{tx.tokenId} • To: {tx.toName} (₹{(tx.priceINR || (tx.priceUSD ? tx.priceUSD * 80 : 0)).toLocaleString('en-IN')})
+                        Token #{tx.tokenId} • To: {tx.toName} (₹{(tx.priceINR || (tx.priceUSD ? tx.priceUSD * APPROX_INR_PER_USD : 0)).toLocaleString('en-IN')})
                       </span>
                     </div>
                   </div>

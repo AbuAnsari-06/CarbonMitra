@@ -1,10 +1,13 @@
 import express from "express";
 import path from "path";
+import crypto from "crypto";
 import { createServer as createViteServer } from "vite";
 import * as turf from "@turf/turf";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import { validateAndGetConfig, getBackendWalletPrivateKey } from "./functions/src/config/index";
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { validateAndGetConfig, getBackendWalletPrivateKey, APPROX_INR_PER_USD } from "./functions/src/config/index";
 import {
   invocationLoggerMiddleware,
   globalErrorHandler,
@@ -16,6 +19,7 @@ import { healthCheckHandler } from "./functions/src/health";
 import { getFromMemoryCache, setToMemoryCache, get30DayCachedEstimate } from "./functions/src/utils/cache";
 import { applyFarmerRateLimit } from "./functions/src/middleware/rateLimiter";
 import { withAtomicNonce } from "./functions/src/utils/nonceManager";
+import { mintCarbonCreditOnChain, transferCarbonCreditOnChain } from "./functions/src/services/blockchain";
 
 dotenv.config();
 
@@ -79,6 +83,7 @@ interface CreditRecord {
   status: "minted" | "listed" | "sold";
   contractTokenId: string;
   mintTxHash: string;
+  polygonScanUrl?: string;
   createdAt: string;
   listedAt?: string;
   soldAt?: string;
@@ -270,7 +275,7 @@ let carbonEstimates: CarbonEstimateRecord[] = [
     auditDetails: {
       rawB04_Red: 0.09,
       rawB08_NIR: 0.60,
-      formulaUsed: "Carbon (CO2e Metric Tons/Yr) = Area (Ha) × 2.5 × (0.50 + 0.85 × NDVI)",
+      formulaUsed: "Carbon (CO2e Metric Tons/Yr) = Area (Ha) × 2.5 × (0.50 + 0.80 × NDVI)",
       satellitePassDate: "2026-08-03",
       cloudCoverPercent: 2.1,
       satelliteSensor: "Sentinel-2B MSI L2A (Multispectral Instrument)"
@@ -475,7 +480,7 @@ function evaluatePixel(sample) {
     auditDetails: {
       rawB04_Red: rawRed,
       rawB08_NIR: rawNIR,
-      formulaUsed: "Carbon (CO2e Metric Tons/Yr) = Area (Ha) × 2.5 × (0.50 + 0.85 × NDVI)",
+      formulaUsed: "Carbon (CO2e Metric Tons/Yr) = Area (Ha) × 2.5 × (0.50 + 0.80 × NDVI)",
       satellitePassDate: satellitePassDate,
       cloudCoverPercent: cloudCover,
       satelliteSensor: "Sentinel-2B MSI L2A (Multispectral Instrument)"
@@ -496,24 +501,25 @@ app.get("/api/lands", asyncHandler(async (req, res) => {
 
 // Register new land boundary polygon
 app.post("/api/registerLand", asyncHandler(async (req, res) => {
-  const { ownerUid, farmerName, landName, state, district, primaryCrop, soilType, practiceType, polygonCoordinates } = req.body;
+  const { ownerUid, farmerName, landName, state, district, primaryCrop, cropType, locationStr, soilType, practiceType, polygonCoordinates, polygonCoords } = req.body;
+  const coords = polygonCoordinates || polygonCoords;
 
-  if (!polygonCoordinates || polygonCoordinates.length < 3) {
+  if (!coords || coords.length < 3) {
     throw new AppError("A valid polygon boundary with at least 3 GPS points is required.", 400, "INVALID_POLYGON");
   }
 
-  const areaHectares = calculatePolygonAreaHectares(polygonCoordinates);
+  const areaHectares = calculatePolygonAreaHectares(coords);
   const newLand: LandRecord = {
     id: `land-${Date.now()}`,
     ownerUid: ownerUid || "farmer-01",
     farmerName: farmerName || "Smallholder Farmer",
     landName: landName || "Registered Farmland Plot",
-    state: state || "India Region",
-    district: district || "District Field",
-    primaryCrop: primaryCrop || "Mixed Crops",
+    state: state || (locationStr ? locationStr.split(',')[1]?.trim() || locationStr : "India Region"),
+    district: district || (locationStr ? locationStr.split(',')[0]?.trim() || locationStr : "District Field"),
+    primaryCrop: primaryCrop || cropType || "Mixed Crops",
     soilType: soilType || "Loam Soil",
     practiceType: practiceType || "Agroforestry",
-    polygonCoordinates,
+    polygonCoordinates: coords,
     areaHectares: areaHectares > 0 ? areaHectares : 2.5,
     registeredAt: new Date().toISOString()
   };
@@ -539,7 +545,13 @@ app.post("/api/fetchNDVI", asyncHandler(async (req, res) => {
     throw new AppError("Invalid land boundary coordinates provided.", 400, "INVALID_COORDINATES");
   }
 
-  const targetLandId = landId || "temp-land";
+  // Generate a unique, deterministic cache key per land or polygon coordinate set to avoid collisions
+  let targetLandId = landId;
+  if (!targetLandId) {
+    const coordString = coords.map((c: { lat: number; lng: number }) => `${Number(c.lat).toFixed(5)},${Number(c.lng).toFixed(5)}`).join(";");
+    const hash = crypto.createHash("sha256").update(coordString).digest("hex").substring(0, 12);
+    targetLandId = `anon-land-${hash}`;
+  }
 
   // 2. Check Server-Side In-Memory TTL Cache (1 Hour TTL)
   const memoryCacheHit = getFromMemoryCache<CarbonEstimateRecord>(targetLandId);
@@ -549,6 +561,7 @@ app.post("/api/fetchNDVI", asyncHandler(async (req, res) => {
     return res.json({
       success: true,
       source: "in-memory-cache",
+      isCached: true,
       estimate: memoryCacheHit.data,
       rateLimitRemaining: rateLimitStatus.remaining
     });
@@ -569,6 +582,7 @@ app.post("/api/fetchNDVI", asyncHandler(async (req, res) => {
     return res.json({
       success: true,
       source: "firestore-30day-cache",
+      isCached: true,
       estimate: docCacheHit,
       rateLimitRemaining: rateLimitStatus.remaining
     });
@@ -640,73 +654,128 @@ app.post("/api/mintCredit", asyncHandler(async (req, res) => {
     );
   }
 
-  // Fetch backend wallet private key securely from Secret Manager
-  const walletPrivateKey = await getBackendWalletPrivateKey();
-  const backendSignerAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+  // 2. Execute mint on chain via Blockchain Service
+  const priceINR = pricePerTonINR || 2000;
+  const priceUSD = pricePerTonUSD || Math.round(priceINR / APPROX_INR_PER_USD);
 
-  // 2. Atomic Nonce Management Execution
-  const mintResult = await withAtomicNonce(
-    backendSignerAddress,
-    async () => {
-      // Mock RPC nonce fetch function
-      return Math.floor(Date.now() / 1000);
-    },
-    async (assignedNonce) => {
-      const nextTokenId = String(1000 + credits.length + 1);
-      const mintTxHash = generateHexHash();
-      const priceINR = pricePerTonINR || 2000;
+  const blockchainResult = await mintCarbonCreditOnChain({
+    farmer: ownerUid || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    amountInTons: Number(amount),
+    landId,
+    carbonEstimateId: carbonEstimateId || `est-${Date.now()}`,
+    sentinelRequestId: sentinelHubRequestId || `SH-S2A-${Date.now()}`
+  });
 
-      const newCredit: CreditRecord = {
-        id: `credit-${Date.now()}`,
-        landId,
-        ownerUid: ownerUid || "farmer-01",
-        farmerName: farmerName || "Registered Farmer",
-        landName: landName || "Farmland Plot",
-        locationStr: locationStr || "India",
-        cropType: cropType || "Agricultural Crops",
-        amount: Number(amount),
-        pricePerTonINR: priceINR,
-        totalPriceINR: Number((amount * priceINR).toFixed(2)),
-        pricePerTonUSD: pricePerTonUSD || Math.round(priceINR / 80),
-        totalPriceUSD: Number((amount * (pricePerTonUSD || Math.round(priceINR / 80))).toFixed(2)),
-        status: "minted",
-        contractTokenId: nextTokenId,
-        mintTxHash,
-        createdAt: new Date().toISOString(),
-        ndviScore: Number(ndviScore || 0.72),
-        sentinelHubRequestId: sentinelHubRequestId || `SH-S2A-${Date.now()}`
-      };
-      (newCredit as any).carbonEstimateId = carbonEstimateId || `est-${Date.now()}`;
-      (newCredit as any).assignedNonce = assignedNonce;
+  const nextTokenId = blockchainResult.contractTokenId || String(1000 + credits.length + 1);
+  const mintTxHash = blockchainResult.txHash;
 
-      credits.unshift(newCredit);
-      return { credit: newCredit, txHash: mintTxHash, assignedNonce };
-    }
-  );
+  const newCredit: CreditRecord = {
+    id: `credit-${Date.now()}`,
+    landId,
+    ownerUid: ownerUid || "farmer-01",
+    farmerName: farmerName || "Registered Farmer",
+    landName: landName || "Farmland Plot",
+    locationStr: locationStr || "India",
+    cropType: cropType || "Agricultural Crops",
+    amount: Number(amount),
+    pricePerTonINR: priceINR,
+    totalPriceINR: Number((amount * priceINR).toFixed(2)),
+    pricePerTonUSD: priceUSD,
+    totalPriceUSD: Number((amount * priceUSD).toFixed(2)),
+    status: "minted",
+    contractTokenId: nextTokenId,
+    mintTxHash,
+    polygonScanUrl: blockchainResult.polygonScanUrl,
+    createdAt: new Date().toISOString(),
+    ndviScore: Number(ndviScore || 0.72),
+    sentinelHubRequestId: sentinelHubRequestId || `SH-S2A-${Date.now()}`
+  };
+  (newCredit as any).carbonEstimateId = carbonEstimateId || `est-${Date.now()}`;
+  (newCredit as any).assignedNonce = blockchainResult.assignedNonce;
+  if (blockchainResult.isSimulated) {
+    (newCredit as any).simulationMode = blockchainResult.simulationMode;
+  }
+
+  credits.unshift(newCredit);
 
   res.json({
     success: true,
-    credit: mintResult.credit,
-    assignedNonce: mintResult.assignedNonce,
-    polygonScanUrl: `https://amoy.polygonscan.com/tx/${mintResult.txHash}`
+    credit: newCredit,
+    assignedNonce: blockchainResult.assignedNonce,
+    isSimulated: blockchainResult.isSimulated,
+    polygonScanUrl: blockchainResult.polygonScanUrl
   });
 }));
 
+function getFirebaseAdminAuth() {
+  const projectId =
+    process.env.FIREBASE_PROJECT_ID ||
+    process.env.GCP_PROJECT_ID ||
+    process.env.VITE_FIREBASE_PROJECT_ID;
+
+  if (!projectId) {
+    return null;
+  }
+
+  if (getApps().length === 0) {
+    initializeApp({ projectId });
+  }
+
+  return getAuth();
+}
+
 // Admin Endpoint: Withdraw test MATIC balance from contract back to deployer wallet
 app.post("/api/admin/withdrawContractBalance", asyncHandler(async (req, res) => {
-  const adminHeader = req.headers["x-admin-claim"] || req.headers["x-admin-auth"];
+  const authService = getFirebaseAdminAuth();
+  if (!authService) {
+    throw new AppError(
+      "Authentication provider is not configured. Admin endpoints are disabled.",
+      503,
+      "AUTH_NOT_CONFIGURED"
+    );
+  }
+
   const authHeader = req.headers["authorization"];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    throw new AppError(
+      "Unauthorized: Missing or invalid Authorization Bearer ID token.",
+      401,
+      "UNAUTHORIZED"
+    );
+  }
 
-  const isAdmin = adminHeader === "true" || (authHeader && authHeader.includes("Bearer admin-token"));
+  const token = authHeader.split("Bearer ")[1]?.trim();
+  if (!token) {
+    throw new AppError(
+      "Unauthorized: Missing Bearer ID token.",
+      401,
+      "UNAUTHORIZED"
+    );
+  }
 
-  if (!isAdmin) {
-    throw new AppError("Unauthorized: Admin authorization with custom claim 'admin' is required.", 403, "ADMIN_REQUIRED");
+  try {
+    const decodedToken = await authService.verifyIdToken(token);
+    if (!decodedToken || decodedToken.admin !== true) {
+      throw new AppError(
+        "Forbidden: Admin authorization with custom claim 'admin: true' is required.",
+        403,
+        "ADMIN_CLAIM_REQUIRED"
+      );
+    }
+    (req as any).user = decodedToken;
+  } catch (err: any) {
+    if (err instanceof AppError) {
+      throw err;
+    }
+    throw new AppError(
+      `Unauthorized: Invalid or expired ID token (${err.message || 'Token verification failed'}).`,
+      401,
+      "INVALID_TOKEN"
+    );
   }
 
   const { recipientAddress } = req.body;
   const targetRecipient = recipientAddress || "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
-
-  const walletPrivateKey = await getBackendWalletPrivateKey();
 
   const withdrawTxHash = generateHexHash();
 
@@ -728,13 +797,13 @@ app.post("/api/marketplace/list", asyncHandler(async (req, res) => {
     throw new AppError("Carbon credit token not found.", 404, "TOKEN_NOT_FOUND");
   }
 
-  const price = pricePerTonINR || (pricePerTonUSD ? pricePerTonUSD * 80 : 2000);
+  const price = pricePerTonINR || (pricePerTonUSD ? pricePerTonUSD * APPROX_INR_PER_USD : 2000);
 
   credit.status = "listed";
   credit.pricePerTonINR = Number(price);
   credit.totalPriceINR = Number((credit.amount * Number(price)).toFixed(2));
-  credit.pricePerTonUSD = Math.round(price / 80);
-  credit.totalPriceUSD = Number((credit.amount * (price / 80)).toFixed(2));
+  credit.pricePerTonUSD = Math.round(price / APPROX_INR_PER_USD);
+  credit.totalPriceUSD = Number((credit.amount * (price / APPROX_INR_PER_USD)).toFixed(2));
   credit.listedAt = new Date().toISOString();
 
   res.json({ success: true, credit });
@@ -754,19 +823,15 @@ app.post("/api/marketplace/buy", asyncHandler(async (req, res) => {
     throw new AppError("Double-purchase prohibited: This carbon credit token has already been purchased.", 400, "TOKEN_ALREADY_SOLD");
   }
 
-  const backendSignerAddress = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
   const targetBuyerAddress = buyerWalletAddress || "0x3C44CdD05aB5001A5429292a0e28a573a4b087a3";
   const priceInUsdCents = Math.round((credit.totalPriceUSD || 300) * 100);
 
-  // Invoke smart contract transfer function wrapped with atomic nonce manager
-  const transferTxResult = await withAtomicNonce(
-    backendSignerAddress,
-    async () => Math.floor(Date.now() / 1000),
-    async (assignedNonce) => {
-      const transferTxHash = generateHexHash();
-      return { transferTxHash, assignedNonce };
-    }
-  );
+  // Invoke blockchain transfer service
+  const transferTxResult = await transferCarbonCreditOnChain({
+    tokenId: credit.contractTokenId,
+    toBuyer: targetBuyerAddress,
+    priceInUsdCents
+  });
 
   const prevOwnerUid = credit.ownerUid;
   const prevOwnerName = credit.farmerName;
@@ -776,7 +841,7 @@ app.post("/api/marketplace/buy", asyncHandler(async (req, res) => {
   credit.buyerUid = buyerUid || "buyer-corporate";
   credit.buyerName = buyerName || "Global Net-Zero ESG Fund";
   credit.soldAt = new Date().toISOString();
-  credit.transferTxHash = transferTxResult.transferTxHash;
+  credit.transferTxHash = transferTxResult.txHash;
 
   const txRecord: TransactionRecord = {
     id: `tx-${Date.now()}`,
@@ -786,11 +851,11 @@ app.post("/api/marketplace/buy", asyncHandler(async (req, res) => {
     toUid: credit.buyerUid || buyerUid || 'buyer-corporate',
     toName: credit.buyerName || buyerName || 'Global Net-Zero ESG Fund',
     amount: credit.amount,
-    priceINR: credit.totalPriceINR || (credit.totalPriceUSD ? credit.totalPriceUSD * 80 : 24000),
+    priceINR: credit.totalPriceINR || (credit.totalPriceUSD ? credit.totalPriceUSD * APPROX_INR_PER_USD : 24000),
     priceUSD: credit.totalPriceUSD || 300,
-    txHash: transferTxResult.transferTxHash,
+    txHash: transferTxResult.txHash,
     timestamp: new Date().toISOString(),
-    polygonScanUrl: `https://amoy.polygonscan.com/tx/${transferTxResult.transferTxHash}`,
+    polygonScanUrl: transferTxResult.polygonScanUrl,
     tokenId: credit.contractTokenId
   };
 
@@ -798,11 +863,11 @@ app.post("/api/marketplace/buy", asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
+    message: "Carbon credit purchased successfully.",
     credit,
     transaction: txRecord,
-    assignedNonce: transferTxResult.assignedNonce,
-    transferTxHash: transferTxResult.transferTxHash,
-    contractMethodInvoked: `transferCredit(${credit.contractTokenId}, ${targetBuyerAddress}, ${priceInUsdCents})`
+    isSimulated: transferTxResult.isSimulated,
+    assignedNonce: transferTxResult.assignedNonce
   });
 }));
 
@@ -889,7 +954,7 @@ async function startServer() {
   });
 }
 
-if (process.env.NODE_ENV !== "test") {
+if (process.env.NODE_ENV !== "test" && !process.env.VITEST) {
   startServer();
 }
 

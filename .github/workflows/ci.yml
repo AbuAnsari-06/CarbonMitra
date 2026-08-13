@@ -140,4 +140,4 @@ jobs:
           BACKEND_WALLET_PRIVATE_KEY: ${{ secrets.BACKEND_WALLET_PRIVATE_KEY }}
           POLYGONSCAN_API_KEY: ${{ secrets.POLYGONSCAN_API_KEY }}
         run: |
-          npx hardhat run scripts/deploy.ts --network polygonAmoy
+          npx hardhat run scripts/deployAndVerify.ts --network polygonAmoy

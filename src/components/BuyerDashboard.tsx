@@ -9,6 +9,7 @@ import {
   EmptyState, ErrorState, SkeletonMetrics, RefetchButton 
 } from './CommonUI';
 import { triggerToast } from '../lib/uiUtils';
+import { APPROX_INR_PER_USD } from '../lib/constants';
 import { motion } from 'motion/react';
 
 interface BuyerDashboardProps {
@@ -31,7 +32,7 @@ export const BuyerDashboard: React.FC<BuyerDashboardProps> = ({
   const myCredits = credits.filter(c => c.status === 'sold' && (c.buyerName === buyerName || c.buyerUid === 'buyer-99'));
   
   const totalOffsetTons = myCredits.reduce((acc, c) => acc + c.amount, 0);
-  const totalInvestedINR = myCredits.reduce((acc, c) => acc + (c.totalPriceINR || (c.totalPriceUSD ? c.totalPriceUSD * 80 : 0)), 0);
+  const totalInvestedINR = myCredits.reduce((acc, c) => acc + (c.totalPriceINR || (c.totalPriceUSD ? c.totalPriceUSD * APPROX_INR_PER_USD : 0)), 0);
   const totalFarmersSupported = new Set(myCredits.map(c => c.farmerName)).size;
 
   // Chart Data

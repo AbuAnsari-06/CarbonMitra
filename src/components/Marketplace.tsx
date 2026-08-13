@@ -10,6 +10,7 @@ import {
   EmptyState, ErrorState, SkeletonCard, RefetchButton 
 } from './CommonUI';
 import { triggerToast } from '../lib/uiUtils';
+import { APPROX_INR_PER_USD } from '../lib/constants';
 
 interface MarketplaceProps {
   credits: CarbonCredit[];
@@ -246,7 +247,7 @@ export const Marketplace: React.FC<MarketplaceProps> = ({
 
                     <div className="text-right">
                       <span className="text-lg font-bold font-display text-emerald-400">
-                        ₹{(credit.pricePerTonINR || (credit.pricePerTonUSD ? credit.pricePerTonUSD * 80 : 2200)).toLocaleString('en-IN')}
+                        ₹{(credit.pricePerTonINR || (credit.pricePerTonUSD ? credit.pricePerTonUSD * APPROX_INR_PER_USD : 2200)).toLocaleString('en-IN')}
                       </span>
                       <span className="text-[10px] text-zinc-500 block font-mono">/ Ton CO2e</span>
                     </div>
@@ -279,7 +280,7 @@ export const Marketplace: React.FC<MarketplaceProps> = ({
                   <div>
                     <span className="text-[10px] text-zinc-500 block font-mono uppercase">Total Price</span>
                     <span className="text-sm font-bold text-zinc-100">
-                      ₹{(credit.totalPriceINR || (credit.totalPriceUSD ? credit.totalPriceUSD * 80 : 0)).toLocaleString('en-IN')}
+                      ₹{(credit.totalPriceINR || (credit.totalPriceUSD ? credit.totalPriceUSD * APPROX_INR_PER_USD : 0)).toLocaleString('en-IN')}
                     </span>
                   </div>
 
@@ -392,7 +393,7 @@ export const Marketplace: React.FC<MarketplaceProps> = ({
                   onClick={() => handlePurchase(selectedCreditDetail)}
                   className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/20"
                 >
-                  Purchase Token for ₹{(selectedCreditDetail.totalPriceINR || (selectedCreditDetail.totalPriceUSD ? selectedCreditDetail.totalPriceUSD * 80 : 0)).toLocaleString('en-IN')}
+                  Purchase Token for ₹{(selectedCreditDetail.totalPriceINR || (selectedCreditDetail.totalPriceUSD ? selectedCreditDetail.totalPriceUSD * APPROX_INR_PER_USD : 0)).toLocaleString('en-IN')}
                 </button>
               </div>
             </motion.div>
@@ -434,7 +435,7 @@ export const Marketplace: React.FC<MarketplaceProps> = ({
                 <div className="flex justify-between">
                   <span className="text-zinc-400">Total Purchase Value:</span>
                   <span className="text-zinc-200">
-                    ₹{(purchasedSuccess.credit.totalPriceINR || (purchasedSuccess.credit.totalPriceUSD ? purchasedSuccess.credit.totalPriceUSD * 80 : 0)).toLocaleString('en-IN')}
+                    ₹{(purchasedSuccess.credit.totalPriceINR || (purchasedSuccess.credit.totalPriceUSD ? purchasedSuccess.credit.totalPriceUSD * APPROX_INR_PER_USD : 0)).toLocaleString('en-IN')}
                   </span>
                 </div>
                 <div className="flex justify-between font-mono text-[11px]">

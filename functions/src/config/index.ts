@@ -4,6 +4,12 @@ import dotenv from "dotenv";
 dotenv.config();
 
 /**
+ * Approximate/demo exchange rate (1 USD ~ 80 INR) used for currency display & estimation.
+ * NOTE: This is a static approximate rate for demo/testing purposes.
+ */
+export const APPROX_INR_PER_USD = 80;
+
+/**
  * Interface representing all validated backend configuration options.
  */
 export interface BackendConfig {
@@ -15,6 +21,7 @@ export interface BackendConfig {
   firebaseProjectId?: string;
   gcpProjectId?: string;
   secretManagerWalletKeyName?: string;
+  approxInrPerUsd: number;
 }
 
 let secretManagerClient: SecretManagerServiceClient | null = null;
@@ -35,6 +42,7 @@ export function validateAndGetConfig(options: { isStrict?: boolean } = {}): Back
     firebaseProjectId: process.env.FIREBASE_PROJECT_ID || process.env.GCP_PROJECT_ID,
     gcpProjectId: process.env.GCP_PROJECT_ID || process.env.FIREBASE_PROJECT_ID,
     secretManagerWalletKeyName: process.env.SECRET_MANAGER_WALLET_KEY_NAME || "BACKEND_WALLET_PRIVATE_KEY",
+    approxInrPerUsd: APPROX_INR_PER_USD,
   };
 
   const missingVars: string[] = [];

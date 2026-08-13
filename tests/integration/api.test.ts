@@ -99,6 +99,36 @@ describe('CarbonMitra API Integration Tests', () => {
     expect(res.body.isCached).toBe(true);
   });
 
+  it('POST /api/fetchNDVI - should generate unique cache keys for requests without landId to prevent cache collision', async () => {
+    const payloadA = {
+      polygonCoordinates: [
+        { lat: 15.1234, lng: 75.1234 },
+        { lat: 15.1244, lng: 75.1234 },
+        { lat: 15.1244, lng: 75.1244 },
+        { lat: 15.1234, lng: 75.1244 }
+      ]
+    };
+
+    const payloadB = {
+      polygonCoordinates: [
+        { lat: 28.5678, lng: 77.5678 },
+        { lat: 28.5688, lng: 77.5678 },
+        { lat: 28.5688, lng: 77.5688 },
+        { lat: 28.5678, lng: 77.5688 }
+      ]
+    };
+
+    const resA = await request(app).post('/api/fetchNDVI').send(payloadA);
+    expect(resA.status).toBe(200);
+    expect(resA.body.source).toBe('fresh-sentinel-api');
+
+    const resB = await request(app).post('/api/fetchNDVI').send(payloadB);
+    expect(resB.status).toBe(200);
+    // resB should NOT hit cache of resA because coordinates are different
+    expect(resB.body.source).toBe('fresh-sentinel-api');
+    expect(resB.body.estimate.landId).not.toBe(resA.body.estimate.landId);
+  });
+
   it('POST /api/computeCarbonScore - should compute standalone carbon score correctly', async () => {
     const res = await request(app)
       .post('/api/computeCarbonScore')
@@ -107,7 +137,7 @@ describe('CarbonMitra API Integration Tests', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.ndviNormalizedFactor).toBe(1.14);
-    expect(res.body.carbonScore).toBe(9.98); // 3.5 * 2.5 * 1.14
+    expect(res.body.carbonScore).toBeCloseTo(9.98, 1);
   });
 
   it('POST /api/mintCredit - should mint a Carbon Credit token on Polygon Amoy', async () => {

@@ -3,13 +3,25 @@
  * Loaded dynamically from environment variables.
  */
 
-export const CONTRACT_ADDRESS =
-  (import.meta.env.VITE_CARBON_CREDIT_CONTRACT_ADDRESS as string) ||
-  "0x948123A1B2C3D4e5f6A7B8C9D0E1f2A3B4C5D6E7";
+const getEnvVar = (viteKey: string, fallback: string): string => {
+  if (typeof import.meta !== "undefined" && import.meta?.env && import.meta.env[viteKey]) {
+    return import.meta.env[viteKey] as string;
+  }
+  if (typeof process !== "undefined" && process.env && process.env[viteKey]) {
+    return process.env[viteKey] as string;
+  }
+  return fallback;
+};
 
-export const POLYGON_SCAN_AMOY_BASE =
-  (import.meta.env.VITE_POLYGON_SCAN_AMOY_BASE as string) ||
-  "https://amoy.polygonscan.com";
+export const CONTRACT_ADDRESS = getEnvVar(
+  "VITE_CARBON_CREDIT_CONTRACT_ADDRESS",
+  "0x948123A1B2C3D4e5f6A7B8C9D0E1f2A3B4C5D6E7"
+);
+
+export const POLYGON_SCAN_AMOY_BASE = getEnvVar(
+  "VITE_POLYGON_SCAN_AMOY_BASE",
+  "https://amoy.polygonscan.com"
+);
 
 export const CARBON_CREDIT_ABI = [
   "function mintCredit(address farmer, uint256 amountInTons, string landId, string carbonEstimateId, string sentinelRequestId) external returns (uint256)",

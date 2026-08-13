@@ -14,6 +14,7 @@ import {
   EmptyState, ErrorState, SkeletonMetrics, SkeletonCard, RefetchButton 
 } from './CommonUI';
 import { triggerToast } from '../lib/uiUtils';
+import { APPROX_INR_PER_USD } from '../lib/constants';
 
 interface FarmerDashboardProps {
   farmerName: string;
@@ -88,7 +89,7 @@ export const FarmerDashboard: React.FC<FarmerDashboardProps> = ({
   const totalCreditsMinted = credits.reduce((acc, c) => acc + c.amount, 0);
   const totalEarningsINR = credits
     .filter(c => c.status === 'sold')
-    .reduce((acc, c) => acc + (c.totalPriceINR || (c.totalPriceUSD ? c.totalPriceUSD * 80 : 0)), 0);
+    .reduce((acc, c) => acc + (c.totalPriceINR || (c.totalPriceUSD ? c.totalPriceUSD * APPROX_INR_PER_USD : 0)), 0);
 
   // Refresh Farmland Data Simulation
   const handleRefetch = async () => {
@@ -868,13 +869,13 @@ export const FarmerDashboard: React.FC<FarmerDashboardProps> = ({
 
                       {credit.status === 'listed' && (
                         <span className="text-[11px] font-mono font-semibold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded border border-emerald-500/20">
-                          Listed @ ₹{(credit.pricePerTonINR || (credit.pricePerTonUSD ? credit.pricePerTonUSD * 80 : 2200)).toLocaleString('en-IN')}/Ton
+                          Listed @ ₹{(credit.pricePerTonINR || (credit.pricePerTonUSD ? credit.pricePerTonUSD * APPROX_INR_PER_USD : 2200)).toLocaleString('en-IN')}/Ton
                         </span>
                       )}
 
                       {credit.status === 'sold' && (
                         <span className="text-[11px] font-mono font-semibold text-purple-400 bg-purple-500/10 px-2.5 py-1 rounded border border-purple-500/20">
-                          Sold (₹{(credit.totalPriceINR || (credit.totalPriceUSD ? credit.totalPriceUSD * 80 : 0)).toLocaleString('en-IN')})
+                          Sold (₹{(credit.totalPriceINR || (credit.totalPriceUSD ? credit.totalPriceUSD * APPROX_INR_PER_USD : 0)).toLocaleString('en-IN')})
                         </span>
                       )}
                     </div>

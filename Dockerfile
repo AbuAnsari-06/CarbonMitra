@@ -1,4 +1,4 @@
-# Stage 1: Build Vite React Frontend
+# Stage 1: Build Application (Frontend & Express Server)
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -12,19 +12,25 @@ RUN npm ci || npm install
 # Copy source code
 COPY . .
 
-# Build Vite static bundle
+# Build Vite static bundle and Express server bundle
 RUN npm run build
 
-# Stage 2: Serve with Production-Grade Nginx
-FROM nginx:alpine AS runner
+# Stage 2: Serve with Node.js Server
+FROM node:20-alpine AS runner
 
-# Copy built assets from builder stage
-COPY --from=builder /app/dist /usr/share/nginx/html
+WORKDIR /app
 
-# Copy custom Nginx configuration (gzip, caching, SPA fallback)
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+ENV NODE_ENV=production
+ENV PORT=3000
+
+# Copy dependency definitions and install production dependencies
+COPY package*.json ./
+RUN npm ci --only=production || npm install --production
+
+# Copy built dist from builder stage
+COPY --from=builder /app/dist ./dist
 
 # Expose port 3000
 EXPOSE 3000
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["node", "dist/server.cjs"]
